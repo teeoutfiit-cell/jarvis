@@ -29,7 +29,7 @@ export async function POST(req) {
     }
 
     const events = await getCachedAgenda(supabase, user.id, settings, false, 10);
-    const agendaCompact = todayEventsCompact(events);
+    const agendaCompact = todayEventsCompact(events, settings.timezone);
 
     const { count } = await supabase
       .from('email_triage')

@@ -7,6 +7,7 @@ import { groqChat } from '@/lib/groq';
 import { MODEL_TIERS } from '@/lib/defaultData';
 import { getWeatherToday, ensureWeatherCoords, WMO } from '@/lib/weather';
 import { cleanNewsTitle } from '@/lib/rss';
+import { todayLabelInTZ, dateKeyInTZ, startOfDayInTZ } from '@/lib/tz';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,9 +18,8 @@ export async function POST(req) {
 
   try {
     const settings = await loadSettings(supabase, user.id);
-    const now = new Date();
-    const dias = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
-    const dataStr = dias[now.getDay()] + ', ' + String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    const tz = settings.timezone || 'America/Sao_Paulo';
+    const dataStr = todayLabelInTZ(tz);
 
     const weather = await getWeatherToday(settings.weather);
     if (settings.weather) await ensureWeatherCoords(settings.weather); // persiste lat/lon se acabou de geocodificar
@@ -28,7 +28,7 @@ export async function POST(req) {
       : '';
 
     const events = await getCachedAgenda(supabase, user.id, settings, false, 10);
-    const agendaLine = todayEventsCompact(events);
+    const agendaLine = todayEventsCompact(events, tz);
 
     const { data: acaoRows } = await supabase
       .from('email_triage')
@@ -48,11 +48,22 @@ export async function POST(req) {
 
     const metas = (settings.notes || []).filter((n) => n.area === 'metas').slice(0, 2).map((n) => n.title + ': ' + n.body).join(' ');
 
+    let leadsLine = '';
+    if (settings.prospecting?.enabled) {
+      const { count: leadsCount } = await supabase
+        .from('leads')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .gte('criado_em', startOfDayInTZ(tz).toISOString());
+      leadsLine = `Prospecção: ${leadsCount || 0} leads novos hoje.`;
+    }
+
     const pacote = [
       `Hoje é ${dataStr}.`,
       weatherLine,
       agendaLine,
       emailLine,
+      leadsLine,
       headlinesLine ? `Manchetes: ${headlinesLine}` : '',
       metas ? `Metas: ${metas}` : ''
     ].filter(Boolean).join('\n');
@@ -66,7 +77,8 @@ export async function POST(req) {
         const systemPrompt =
           buildSystemPrompt({ settings, agendaCompact: agendaLine, emailActionCompact: `E-mails pedindo ação: ${acaoCount}.` }) +
           '\n\nAgora monte o MORNING DIGEST: um briefing corrido, natural, de uns 30 segundos falados, cobrindo saudação, ' +
-          'agenda, e-mails de ação e manchetes, terminando com uma frase de foco do dia conectada às metas do usuário.';
+          'agenda, e-mails de ação, leads novos de prospecção (se houver) e manchetes, terminando com uma frase de foco do ' +
+          'dia conectada às metas do usuário.';
         texto = await groqChat({
           apiKey,
           model,
@@ -83,12 +95,12 @@ export async function POST(req) {
 
     if (!texto) {
       texto =
-        `Bom dia, ${settings.address}. Hoje é ${dataStr}. ${weatherLine} ${agendaLine} ${emailLine}` +
+        `Bom dia, ${settings.address}. Hoje é ${dataStr}. ${weatherLine} ${agendaLine} ${emailLine} ${leadsLine}` +
         (headlinesLine ? ` Nas notícias: ${headlinesLine}.` : '') +
         (metas ? ` Foco do dia: ${metas}.` : '');
     }
 
-    settings.lastDigestDate = now.toDateString();
+    settings.lastDigestDate = dateKeyInTZ(new Date(), tz);
     await saveSettings(supabase, user.id, settings);
 
     return NextResponse.json({ text: texto });

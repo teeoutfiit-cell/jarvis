@@ -132,3 +132,49 @@ export function DigestPanel({ text, loading }) {
   if (!text) return <div className="emptyHint">Clique em "Bom dia" ou diga a wake word + "bom dia".</div>;
   return <div className="digestText">{text.split('\n').map((line, i) => <p key={i}>{line}</p>)}</div>;
 }
+
+export function ProspectPanel({ leads, loading, onSetStatus }) {
+  if (loading) return <div className="emptyHint">Buscando leads...</div>;
+  if (!leads || !leads.length) {
+    return <div className="emptyHint">Nenhum lead ainda. Configure nichos e cidades em ⚙ → Prospecção e clique em "Buscar agora".</div>;
+  }
+  const buckets = { novo: [], contatado: [], descartado: [] };
+  leads.forEach((l) => buckets[l.status || 'novo'].push(l));
+
+  const Row = ({ l }) => (
+    <div className="leadRow">
+      <div className="leadMain">
+        <div className="leadNome">{l.nome} {l.score != null && <span className="leadScore">{l.score}</span>}</div>
+        <div className="leadDados">{l.telefone} · {l.endereco}</div>
+        {l.qualificacao && <div className="leadQualif">{l.qualificacao}</div>}
+      </div>
+      <div className="leadActions">
+        {l.status !== 'contatado' && <button className="btn" onClick={() => onSetStatus(l.id, 'contatado')}>✓ Contatado</button>}
+        {l.status !== 'descartado' && <button className="btn danger" onClick={() => onSetStatus(l.id, 'descartado')}>Descartar</button>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      {buckets.novo.length > 0 && (
+        <div className="emailSection">
+          <div className="emailSecLabel">NOVOS ({buckets.novo.length})</div>
+          {buckets.novo.map((l) => <Row key={l.id} l={l} />)}
+        </div>
+      )}
+      {buckets.contatado.length > 0 && (
+        <div className="emailSection">
+          <div className="emailSecLabel">CONTATADOS ({buckets.contatado.length})</div>
+          {buckets.contatado.map((l) => <Row key={l.id} l={l} />)}
+        </div>
+      )}
+      {buckets.descartado.length > 0 && (
+        <div className="emailSection">
+          <div className="emailSecLabel">DESCARTADOS ({buckets.descartado.length})</div>
+          {buckets.descartado.map((l) => <Row key={l.id} l={l} />)}
+        </div>
+      )}
+    </div>
+  );
+}

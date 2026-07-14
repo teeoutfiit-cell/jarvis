@@ -5,12 +5,17 @@ import { MODEL_TIERS } from '@/lib/defaultData';
 
 const THEME_COLORS = ['#2dd4ff', '#8b7cff', '#f7931a', '#10b981', '#ec4899'];
 
-export default function SettingsModal({ settings, onUpdate, onClose, availableVoices, voicePrefName, onSetVoicePreference, onPreviewVoice }) {
+export default function SettingsModal({ settings, onUpdate, onClose, availableVoices, voicePrefName, onSetVoicePreference, onPreviewVoice, onRunProspectNow, prospectRunning, prospectMessage }) {
   const [tab, setTab] = useState('agenda');
   const [newsSubjectsText, setNewsSubjectsText] = useState((settings.newsConfig?.subjects || []).join('\n'));
   const [newsCount, setNewsCount] = useState(settings.newsConfig?.count || 5);
   const [weatherCity, setWeatherCity] = useState(settings.weather?.city || '');
   const [groqKey, setGroqKey] = useState(settings.groqApiKey || '');
+  const [prospectGoogleKey, setProspectGoogleKey] = useState(settings.prospecting?.googleApiKey || '');
+  const [prospectNiches, setProspectNiches] = useState((settings.prospecting?.niches || []).join('\n'));
+  const [prospectCities, setProspectCities] = useState((settings.prospecting?.cities || []).join('\n'));
+  const [prospectCriteria, setProspectCriteria] = useState(settings.prospecting?.criteria || '');
+  const [prospectMinLeads, setProspectMinLeads] = useState(settings.prospecting?.minLeadsPerDay || 10);
 
   const calendars = settings.calendars || [];
   const emailAccounts = settings.emailAccounts || [];
@@ -51,6 +56,21 @@ export default function SettingsModal({ settings, onUpdate, onClose, availableVo
   function setTier(tier) {
     onUpdate({ modelTier: tier });
   }
+  function saveProspecting() {
+    onUpdate({
+      prospecting: {
+        ...settings.prospecting,
+        googleApiKey: prospectGoogleKey.trim(),
+        niches: prospectNiches.split('\n').map((s) => s.trim()).filter(Boolean),
+        cities: prospectCities.split('\n').map((s) => s.trim()).filter(Boolean),
+        criteria: prospectCriteria.trim(),
+        minLeadsPerDay: parseInt(prospectMinLeads, 10) || 10
+      }
+    });
+  }
+  function toggleProspecting() {
+    onUpdate({ prospecting: { ...settings.prospecting, enabled: !settings.prospecting?.enabled } });
+  }
 
   return (
     <div id="settingsOverlay" className="show" onClick={(e) => { if (e.target.id === 'settingsOverlay') onClose(); }}>
@@ -60,9 +80,9 @@ export default function SettingsModal({ settings, onUpdate, onClose, availableVo
           <button className="btn" onClick={onClose}>Fechar</button>
         </div>
         <nav id="setTabs">
-          {['agenda', 'emails', 'news', 'digest', 'motor', 'voz'].map((t) => (
+          {['agenda', 'emails', 'news', 'digest', 'prospect', 'motor', 'voz'].map((t) => (
             <button key={t} className={'setTabBtn' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>
-              {{ agenda: 'Agenda', emails: 'E-mails', news: 'Notícias', digest: 'Digest', motor: 'Motor', voz: 'Voz' }[t]}
+              {{ agenda: 'Agenda', emails: 'E-mails', news: 'Notícias', digest: 'Digest', prospect: 'Prospecção', motor: 'Motor', voz: 'Voz' }[t]}
             </button>
           ))}
         </nav>
@@ -127,6 +147,58 @@ export default function SettingsModal({ settings, onUpdate, onClose, availableVo
               <input type="text" value={weatherCity} placeholder="ex: São Paulo, BR" onChange={(e) => setWeatherCity(e.target.value)} />
             </div>
             <button className="btn accent" onClick={saveWeather}>Salvar cidade</button>
+          </div>
+        )}
+
+        {tab === 'prospect' && (
+          <div className="setPane">
+            <p className="setHint">
+              O Jarvis busca negócios locais na Google Places API todo dia de manhã, filtra quem tem telefone e está
+              em operação, e qualifica com a Groq usando o critério abaixo + o que ele sabe do seu negócio no Second Brain.
+            </p>
+            <p className="setWarn">
+              A Google Places API é paga por SKU (não é gratuita), mas pro volume daqui (poucas buscas por dia) o custo
+              real fica na casa de poucos dólares por mês. Você precisa de uma chave da Places API (New) com billing
+              ativado no Google Cloud Console.
+            </p>
+
+            <div className="setRow">
+              <label>Ativar prospecção diária</label>
+              <button className={'tierbtn' + (settings.prospecting?.enabled ? ' active' : '')} onClick={toggleProspecting} style={{ flex: 'none', minWidth: 90 }}>
+                {settings.prospecting?.enabled ? 'Ativada' : 'Desativada'}
+              </button>
+            </div>
+
+            <p className="setHint">Chave da Google Places API (console.cloud.google.com → APIs & Services → Credentials).</p>
+            <input type="password" value={prospectGoogleKey} placeholder="Cole sua chave da Google Places API" onChange={(e) => setProspectGoogleKey(e.target.value)} />
+
+            <p className="setHint">Nichos que você quer prospectar (um por linha).</p>
+            <textarea rows={3} value={prospectNiches} onChange={(e) => setProspectNiches(e.target.value)} placeholder={'imobiliária\nclínica odontológica'} />
+
+            <p className="setHint">Cidades/regiões alvo (uma por linha).</p>
+            <textarea rows={2} value={prospectCities} onChange={(e) => setProspectCities(e.target.value)} placeholder={'São Paulo, SP\nCampinas, SP'} />
+
+            <p className="setHint">Critério de qualificação (em português, livre — a IA usa isso pra pontuar cada lead).</p>
+            <textarea rows={3} value={prospectCriteria} onChange={(e) => setProspectCriteria(e.target.value)} />
+
+            <div className="setRow">
+              <label>Mínimo de leads/dia (meta)</label>
+              <input type="number" min={1} max={50} value={prospectMinLeads} onChange={(e) => setProspectMinLeads(e.target.value)} />
+            </div>
+
+            <button className="btn accent" onClick={saveProspecting}>Salvar configuração</button>
+
+            <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+              <button className="btn accent" onClick={onRunProspectNow} disabled={prospectRunning}>
+                {prospectRunning ? 'Buscando...' : '🔍 Buscar agora'}
+              </button>
+              {prospectMessage && <p className="setHint" style={{ marginTop: 8 }}>{prospectMessage}</p>}
+            </div>
+
+            <p className="setHint" style={{ marginTop: 10 }}>
+              A busca automática roda 1x por dia (via Vercel Cron). Leads já vistos antes não se repetem — só entram
+              como "novos" negócios que a busca ainda não tinha encontrado.
+            </p>
           </div>
         )}
 

@@ -41,5 +41,35 @@ create policy "own triage" on email_triage
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+-- Leads gerados pela prospecção diária (Google Places API + qualificação por IA).
+create table if not exists leads (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  place_id text not null,
+  nome text,
+  telefone text,
+  endereco text,
+  categoria text,
+  site text,
+  rating numeric,
+  avaliacoes int,
+  qualificacao text,
+  score int,
+  origem_busca text,
+  status text not null default 'novo' check (status in ('novo', 'contatado', 'descartado')),
+  criado_em timestamptz not null default now(),
+  unique (user_id, place_id)
+);
+
+alter table leads enable row level security;
+
+drop policy if exists "own leads" on leads;
+create policy "own leads" on leads
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create index if not exists leads_user_created_idx on leads (user_id, criado_em desc);
+
 -- Índice para limpar/paginar a triagem por data se precisar no futuro.
 create index if not exists email_triage_ts_idx on email_triage (user_id, ts desc);

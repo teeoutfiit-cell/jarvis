@@ -6,9 +6,10 @@ import { createClient } from '@/lib/supabase/client';
 import { AREA, defaultSettings } from '@/lib/defaultData';
 import { cleanNewsTitle } from '@/lib/rss';
 import { pickBestVoice, splitSentences, timeToSpeech, naturalJoin } from '@/lib/voice';
+import { dateKeyInTZ } from '@/lib/tz';
 import SecondBrainGraph from './SecondBrainGraph';
 import SettingsModal from './SettingsModal';
-import { AgendaPanel, EmailsPanel, NewsPanel, DigestPanel } from './Panels';
+import { AgendaPanel, EmailsPanel, NewsPanel, DigestPanel, ProspectPanel } from './Panels';
 
 const norm = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
@@ -43,12 +44,17 @@ export default function JarvisApp() {
   const [digestLoading, setDigestLoading] = useState(false);
   const [availableVoices, setAvailableVoices] = useState([]);
   const [voicePrefName, setVoicePrefName] = useState('');
+  const [leads, setLeads] = useState([]);
+  const [leadsLoading, setLeadsLoading] = useState(false);
+  const [prospectRunning, setProspectRunning] = useState(false);
+  const [prospectMessage, setProspectMessage] = useState('');
 
   // refs para leitura síncrona dentro de callbacks (evita closures desatualizadas)
   const settingsRef = useRef(null); settingsRef.current = settings;
   const agendaEventsRef = useRef([]); agendaEventsRef.current = agendaEvents;
   const emailMessagesRef = useRef([]); emailMessagesRef.current = emailMessages;
   const newsBySubjectRef = useRef({}); newsBySubjectRef.current = newsBySubject;
+  const leadsRef = useRef([]); leadsRef.current = leads;
 
   const busyRef = useRef(false);
   const awakeRef = useRef(false);
@@ -89,10 +95,11 @@ export default function JarvisApp() {
     refreshAgenda(false);
     refreshEmails();
     refreshNews(false);
+    refreshLeads();
 
     speak('Sistemas online. Estou ouvindo, ' + s.address + '.');
 
-    if (s.lastDigestDate !== new Date().toDateString()) {
+    if (s.lastDigestDate !== dateKeyInTZ(new Date(), s.timezone)) {
       setTimeout(() => runDigest('auto'), 5000);
     }
   }
@@ -251,6 +258,14 @@ export default function JarvisApp() {
     const emails = emailMessagesRef.current;
     const news = newsBySubjectRef.current;
 
+    if (n.includes('lead')) {
+      showPanel('prospect');
+      const leadsAtuais = leadsRef.current.filter((l) => l.status === 'novo');
+      if (!leadsAtuais.length) { speakLocal('Nenhum lead novo no momento.'); return true; }
+      const top = leadsAtuais.slice(0, 5).map((l) => l.nome + ', telefone ' + l.telefone);
+      speakLocal(`Você tem ${leadsAtuais.length} leads novos. Os principais: ` + naturalJoin(top) + '.');
+      return true;
+    }
     if (n.includes('bom dia')) { showPanel('digest'); runDigest('voz'); return true; }
     if (n.includes('atualizar') && n.includes('mail')) { refreshEmails(); speakLocal('Atualizando seus e-mails.'); return true; }
     if (n.includes('atualizar') && n.includes('noticia')) { refreshNews(true); speakLocal('Atualizando as notícias.'); return true; }
@@ -424,11 +439,52 @@ export default function JarvisApp() {
       setDigestText(text);
       speak(text);
       const s = settingsRef.current;
-      if (s) { const ns = { ...s, lastDigestDate: new Date().toDateString() }; setSettings(ns); settingsRef.current = ns; }
+      if (s) { const ns = { ...s, lastDigestDate: dateKeyInTZ(new Date(), s.timezone) }; setSettings(ns); settingsRef.current = ns; }
     } catch (e) {
       setDigestText('Não consegui montar seu briefing agora.');
     }
     setDigestLoading(false);
+  }
+
+  async function refreshLeads() {
+    setLeadsLoading(true);
+    try {
+      const res = await fetch('/api/prospect/leads?limit=100');
+      const data = await res.json();
+      setLeads(data.leads || []);
+    } catch (e) {}
+    setLeadsLoading(false);
+  }
+
+  async function runProspectNow() {
+    setProspectRunning(true);
+    setProspectMessage('Buscando negócios e qualificando com a Groq — pode levar até um minuto...');
+    try {
+      const res = await fetch('/api/prospect/run-now', { method: 'POST' });
+      const data = await res.json();
+      if (data.skipped) {
+        setProspectMessage('Não rodou: ' + data.reason + '.');
+      } else if (data.error) {
+        setProspectMessage('Erro: ' + data.error);
+      } else {
+        setProspectMessage(`Encontrados ${data.found}, novos ${data.novos}, qualificados ${data.qualificados}.`);
+        await refreshLeads();
+      }
+    } catch (e) {
+      setProspectMessage('Não consegui rodar a busca agora.');
+    }
+    setProspectRunning(false);
+  }
+
+  async function setLeadStatus(id, status) {
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, status } : l)));
+    try {
+      await fetch('/api/prospect/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status })
+      });
+    } catch (e) {}
   }
 
   /* ───────── entrada por texto ───────── */
@@ -543,6 +599,7 @@ export default function JarvisApp() {
             <button className={'tabbtn' + (activeTab === 'emails' ? ' active' : '')} onClick={() => setActiveTab('emails')}>✉ E-MAILS</button>
             <button className={'tabbtn' + (activeTab === 'news' ? ' active' : '')} onClick={() => setActiveTab('news')}>📰 NOTÍCIAS</button>
             <button className={'tabbtn' + (activeTab === 'digest' ? ' active' : '')} onClick={() => setActiveTab('digest')}>☀ DIGEST</button>
+            <button className={'tabbtn' + (activeTab === 'prospect' ? ' active' : '')} onClick={() => setActiveTab('prospect')}>🎯 PROSPECÇÃO</button>
           </nav>
 
           {activeTab === 'agenda' && (
@@ -592,6 +649,21 @@ export default function JarvisApp() {
               <div className="panelBody"><DigestPanel text={digestText} loading={digestLoading} /></div>
             </section>
           )}
+
+          {activeTab === 'prospect' && (
+            <section className="panel">
+              <div className="panelBar">
+                <span className="ptitle">🎯 Prospecção de Clientes</span>
+                <span className="psub">{leads.filter((l) => l.status === 'novo').length} novo(s)</span>
+                <div className="spacer" />
+                <button className="btn" onClick={refreshLeads}>↻</button>
+                <button className="btn accent" onClick={runProspectNow} disabled={prospectRunning}>
+                  {prospectRunning ? 'Buscando...' : '🔍 Buscar agora'}
+                </button>
+              </div>
+              <div className="panelBody"><ProspectPanel leads={leads} loading={leadsLoading} onSetStatus={setLeadStatus} /></div>
+            </section>
+          )}
         </div>
       )}
 
@@ -604,6 +676,9 @@ export default function JarvisApp() {
           voicePrefName={voicePrefName}
           onSetVoicePreference={setVoicePreference}
           onPreviewVoice={previewVoice}
+          onRunProspectNow={runProspectNow}
+          prospectRunning={prospectRunning}
+          prospectMessage={prospectMessage}
         />
       )}
 
